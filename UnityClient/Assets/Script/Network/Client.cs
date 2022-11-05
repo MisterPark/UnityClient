@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -18,13 +19,17 @@ public class Client : MonoBehaviour
     [SerializeField] private string serverIP;
     [SerializeField] private int port;
     [SerializeField] private bool autoConnection = true;
-    [SerializeField] private UnityEvent<object> OnReceive;
+    [SerializeField] private int receiveBufferSize = 1024;
+    [SerializeField] private int packetPoolSize = 1000;
+    [SerializeField] private GameEvent<object> OnReceive;
 
     private Socket socket;
     private MemoryPool<SocketAsyncEventArgs> readWritePool;
-    private RingBuffer recvBuffer = new RingBuffer();
     private string sessionId;
     private IPEndPoint remoteEndPoint;
+
+    private MemoryPool<Packet> packetPool;
+    private NetBuffer recvBuffer;
 
     private void Awake()
     {
@@ -41,6 +46,15 @@ public class Client : MonoBehaviour
 
     private void Start()
     {
+        OnReceive.AddListener(OnReceiveCallback);
+        recvBuffer = new NetBuffer(receiveBufferSize);
+        packetPool = new MemoryPool<Packet>(0);
+        for (int i = 0; i < packetPoolSize; i++)
+        {
+            Packet packet = new Packet(receiveBufferSize);
+            packetPool.Free(packet);
+        }
+
         remoteEndPoint = new IPEndPoint(IPAddress.Parse(serverIP), port);
         readWritePool = new MemoryPool<SocketAsyncEventArgs>(0);
 
@@ -54,11 +68,18 @@ public class Client : MonoBehaviour
         }
 
         socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.LingerState = new LingerOption(true, 0);
+        socket.NoDelay = true;
 
-        if(autoConnection)
+        if (autoConnection)
         {
             Connect();
         }
+    }
+
+    private void OnApplicationQuit()
+    {
+        Disconnect();
     }
 
     private void Connect()
@@ -68,10 +89,19 @@ public class Client : MonoBehaviour
         SocketAsyncEventArgs args = new SocketAsyncEventArgs();
         args.Completed += ConnectCompleted;
         args.RemoteEndPoint = remoteEndPoint;
-        socket.ConnectAsync(args);
+        bool pending = socket.ConnectAsync(args);
+        if (!pending)
+        {
+            ProcessConnect(args);
+        }
     }
 
     private void ConnectCompleted(object sender, SocketAsyncEventArgs e)
+    {
+        ProcessConnect(e);
+    }
+
+    private void ProcessConnect(SocketAsyncEventArgs e)
     {
         if (e.SocketError == SocketError.Success)
         {
@@ -110,7 +140,7 @@ public class Client : MonoBehaviour
 
     private void ProcessReceive(SocketAsyncEventArgs e)
     {
-        if (e.BytesTransferred > 0 && e.SocketError == SocketError.Success)
+        if (e.SocketError == SocketError.Success && e.BytesTransferred > 0)
         {
             recvBuffer.MoveRear(e.BytesTransferred);
 
@@ -120,112 +150,105 @@ public class Client : MonoBehaviour
             {
                 recvBuffer.Resize(recvBuffer.BufferSize * 2);
             }
-
             e.SetBuffer(recvBuffer.Buffer, recvBuffer.Rear, recvBuffer.WritableLength);
-
             bool pending = socket.ReceiveAsync(e);
             if (!pending)
             {
                 ProcessReceive(e);
             }
         }
+        else if (e.BytesTransferred == 0)
+        {
+            Logger.Log(LogLevel.System, $"정상 종료.");
+            readWritePool.Free(e);
+            Disconnect();
+        }
         else
         {
+            Logger.Log(LogLevel.Error, $"Receicve Failed! SocketError.{e.SocketError}");
+            readWritePool.Free(e);
             Disconnect();
         }
     }
 
     private void ProcessPacket()
     {
-        NetworkHeader header = new NetworkHeader();
-        int headerLength = Marshal.SizeOf(header);
-        int packetLength;
+        NetHeader header;
+        header.Code = 0;
+        header.Length = 0;
+        int headerSize = Marshal.SizeOf(header);
+        int size;
 
         while (true)
         {
-            if (recvBuffer.Length < headerLength)
+            size = recvBuffer.Length;
+            if (size < headerSize) break;
+            recvBuffer.Peek<NetHeader>(ref header);
+            if (header.Code != Packet.CODE)
             {
+                Logger.Log(LogLevel.Warning, $"패킷의 코드가 일치하지 않습니다. Code : {header.Code}");
                 break;
             }
+            if (size < headerSize + header.Length) break;
 
-            recvBuffer.Peek<NetworkHeader>(ref header);
-            if (header.magicNumber != Protocol.MagicNumber)
+            Packet packet = packetPool.Allocate();
+            packet.Initialize();
+            if (packet.WritableLength < header.Length)
             {
-                Logger.Log(LogLevel.Error, $"Magic Code does not match.");
-                Disconnect();
-                break;
+                packet.Resize(header.Length);
             }
 
-            packetLength = headerLength + header.messageLength;
+            recvBuffer.MoveFront(headerSize);
+            recvBuffer.Read(ref packet.Buffer, packet.Rear, header.Length);
+            packet.MoveRear(header.Length);
 
-            if (recvBuffer.Length < packetLength)
-            {
-                break;
-            }
-            // 여기서 패킷처리
-            recvBuffer.MoveFront(headerLength);
-
-            int classLength = 0;
-            recvBuffer.Read(ref classLength);
-
-            string className = string.Empty;
-            recvBuffer.Read(ref className, classLength);
-
+            string typeName = string.Empty;
             string json = string.Empty;
-            recvBuffer.Read(ref json, header.messageLength);
+            packet.Read(ref typeName);
+            packet.Read(ref json);
 
-            Type msgType = Type.GetType(className);
-            if(msgType == null)
-            {
-                // 존재하지 않는 구조체 이슈 (프로토콜 버전 차이 가능성)
-                Logger.Log(LogLevel.Error, $"Invalid message.");
-                Disconnect();
-                break;
-            }
+            packetPool.Free(packet);
 
-            object msg = JsonConvert.DeserializeObject(json, msgType);
-            if(msg == null)
-            {
-                // 존재하지 않는 구조체 이슈 (프로토콜 버전 차이 가능성)
-                Logger.Log(LogLevel.Error, $"Invalid message.");
-                Disconnect();
-                break;
-            }
+            object msg = JsonConvert.DeserializeObject(json, Type.GetType(typeName));
 
-            OnReceiveCallback(msg);
             OnReceive.Invoke(msg);
         }
     }
 
     private void ProcessSend(SocketAsyncEventArgs e)
     {
-        if(e.SocketError != SocketError.Success)
+        if (e.SocketError == SocketError.Success)
         {
-            Logger.Log(LogLevel.Warning, $"Send Failed. SocketError : {e.SocketError}");
+            Packet packet = (Packet)e.UserToken;
+            packetPool.Free(packet);
+        }
+        else if(e.SocketError == SocketError.IOPending)
+        {
+
+        }
+        else
+        {
+            Logger.Log(LogLevel.Error, $"Send Failed. SocketError : {e.SocketError}");
+            Packet packet = (Packet)e.UserToken;
+            packetPool.Free(packet);
+            readWritePool.Free(e);
             Disconnect();
         }
     }
 
     public void SendUnicast(object data)
     {
-        Packet packet = new Packet();
-        
-        NetworkHeader header = new NetworkHeader();
-        header.magicNumber = Protocol.MagicNumber;
+        Packet packet = packetPool.Allocate();
+        packet.Initialize();
 
-        string className = data.GetType().Name;
+        string typeName = data.GetType().Name;
         string json = JsonConvert.SerializeObject(data);
+        packet.Write(typeName);
+        packet.Write(json);
 
-        // 여기서 암호화
-        byte[] binary = Encoding.UTF8.GetBytes(json);
-
-        header.messageLength = binary.Length;
-        packet.Write(header);
-        packet.Write(className);
-        packet.Write(binary);
-
-
+        packet.SetHeader();
         SocketAsyncEventArgs args = readWritePool.Allocate();
+        args.UserToken = packet;
         args.SetBuffer(packet.Buffer, packet.Front, packet.Length);
         bool pending = socket.SendAsync(args);
         if (!pending)
@@ -236,20 +259,18 @@ public class Client : MonoBehaviour
 
     public void Disconnect()
     {
-        try
+        if (socket != null)
         {
             socket.Shutdown(SocketShutdown.Both);
-        }
-        finally
-        {
-            Logger.Log($"Disconnected.");
-            socket.Close();
+            socket.Disconnect(false);
+            socket.Close(5);
             socket.Dispose();
             socket = null;
+            Logger.Log(LogLevel.System, "Disconnected.");
         }
     }
 
-    private string GetPublicIPAddress()
+    public string GetPublicIPAddress()
     {
         var request = (HttpWebRequest)WebRequest.Create("http://ifconfig.me");
 
@@ -269,7 +290,7 @@ public class Client : MonoBehaviour
         return publicIPAddress.Replace("\n", "");
     }
 
-    private string GetLocalIPAddress()
+    public string GetLocalIPAddress()
     {
         string localIP;
         using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
@@ -283,12 +304,11 @@ public class Client : MonoBehaviour
 
     private void OnReceiveCallback(object msg)
     {
-        if (msg.GetType() == typeof(MsgNetStat_SC))
+        if (msg.GetType() == typeof(MsgNetStat))
         {
-            MsgNetStat_SC obj = (MsgNetStat_SC)msg;
-            sessionId = obj.id;
+            MsgNetStat obj = (MsgNetStat)msg;
             obj.ipAddress = GetPublicIPAddress();
-            Logger.Log(LogLevel.Debug, $"Session ID: {sessionId}");
+            sessionId = obj.id;
             SendUnicast(obj);
         }
     }

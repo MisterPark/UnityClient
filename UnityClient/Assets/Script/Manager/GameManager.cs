@@ -8,6 +8,8 @@ public class GameManager : MonoBehaviour
     public static GameManager Instance { get; private set; }
 
     [SerializeField] private GameEvent<object> onReceiveEvent;
+    [SerializeField] private GameEventString onSendChatEvent;
+    [SerializeField] private GameEventString onRecvChatEvent;
 
     private void Awake()
     {
@@ -25,11 +27,15 @@ public class GameManager : MonoBehaviour
     private void OnEnable()
     {
         onReceiveEvent.AddListener(OnReceive);
+        onSendChatEvent.AddListener(OnSendChat);
+        onRecvChatEvent.AddListener(OnRecvChat);
     }
 
     private void OnDisable()
     {
         onReceiveEvent.RemoveListener(OnReceive);
+        onSendChatEvent.RemoveListener(OnSendChat);
+        onRecvChatEvent.RemoveListener(OnRecvChat);
     }
 
     private void Start()
@@ -45,10 +51,22 @@ public class GameManager : MonoBehaviour
     public void OnReceive(object message)
     {
         Type type = message.GetType();
+        if(type == typeof(MsgChat))
+        {
+            MsgChat chat = (MsgChat)message;
+            onRecvChatEvent.Invoke(chat.message);
+        }
     }
 
-    public void OnChat(string message)
+    public void OnSendChat(string message)
     {
-        Debug.Log(message);
+        MsgChat msg = new MsgChat();
+        msg.message = message;
+        Client.Instance.SendUnicast(msg);
+    }
+
+    public void OnRecvChat(string message)
+    {
+        Logger.Log(LogLevel.Debug, message);
     }
 }
