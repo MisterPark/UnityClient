@@ -12,3 +12,5 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 05d49a5953dfd0d468f669a1d0d67966, type: 3}
   m_Name: SomeThing
   m_EditorClassIdentifier: 
+  initialValue: 80
+  runtimeValue: 80

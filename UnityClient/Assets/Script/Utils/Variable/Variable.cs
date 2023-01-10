@@ -24,11 +24,6 @@ public class Variable<T> : VariableBase, ISerializationCallbackReceiver
         }
     }
 
-    public Variable()
-    {
-        runtimeValue = initialValue;
-    }
-
     public void OnBeforeSerialize()
     {
         

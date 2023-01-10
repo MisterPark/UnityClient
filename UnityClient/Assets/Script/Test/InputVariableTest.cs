@@ -7,7 +7,7 @@ public class InputVariableTest : MonoBehaviour
 {
     [SerializeField] private Button button;
     [SerializeField] private InputField inputField;
-    [SerializeField] private VariableInt something;
+    [SerializeField] private Variable<int> something;
 
 
     private void OnEnable()
