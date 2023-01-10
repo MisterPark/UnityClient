@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
@@ -20,7 +19,7 @@ public class GameEvent<T> : GameEventBase
     public void Invoke(T arg)
     {
         int count = listeners.Count;
-        for(int i = 0; i < count; i++)
+        for (int i = listeners.Count - 1; i >= 0; i--)
         {
             listeners[i].Invoke(arg);
         }
@@ -43,7 +42,7 @@ public class GameEventBase : ScriptableObject
     public void Invoke()
     {
         int count = listeners.Count;
-        for (int i = 0; i < count; i++)
+        for (int i = listeners.Count - 1; i >= 0; i--)
         {
             listeners[i].Invoke();
         }

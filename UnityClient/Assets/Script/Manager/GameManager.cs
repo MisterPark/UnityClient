@@ -11,6 +11,8 @@ public class GameManager : MonoBehaviour
     [SerializeField] private GameEventString onSendChatEvent;
     [SerializeField] private GameEventString onRecvChatEvent;
 
+    [SerializeField] private Variable<int> someThing;
+
     private void Awake()
     {
         if (Instance == null)
@@ -40,7 +42,12 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        UnityEngine.Random.InitState(0);
+        for(int i=0;i<10;i++)
+        {
+            Debug.Log(UnityEngine.Random.Range(0, 10));
 
+        }
     }
 
     private void Update()
