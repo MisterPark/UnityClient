@@ -1,29 +1,17 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
-public class GameManager : MonoBehaviour
+public class GameManager : MonoSingleton<GameManager>
 {
-    public static GameManager Instance { get; private set; }
-
     [SerializeField] private GameEvent<object> onReceiveEvent;
     [SerializeField] private GameEventString onSendChatEvent;
     [SerializeField] private GameEventString onRecvChatEvent;
 
     [SerializeField] private Variable<int> someThing;
 
-    private void Awake()
+    protected override void Awake()
     {
-        if (Instance == null)
-        {
-            Instance = this;
-            DontDestroyOnLoad(gameObject);
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
+        base.Awake();
     }
 
     private void OnEnable()
@@ -43,7 +31,7 @@ public class GameManager : MonoBehaviour
     private void Start()
     {
         UnityEngine.Random.InitState(0);
-        for(int i=0;i<10;i++)
+        for (int i = 0; i < 10; i++)
         {
             Debug.Log(UnityEngine.Random.Range(0, 10));
 
@@ -58,7 +46,7 @@ public class GameManager : MonoBehaviour
     public void OnReceive(object message)
     {
         Type type = message.GetType();
-        if(type == typeof(MsgChat))
+        if (type == typeof(MsgChat))
         {
             MsgChat chat = (MsgChat)message;
             onRecvChatEvent.Invoke(chat.message);
